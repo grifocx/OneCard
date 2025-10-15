@@ -39,7 +39,7 @@ export default function ProgressPage() {
     
     return {
       date,
-      completed: card?.destroyed && tasksCompleted > 0 || false,
+      completed: tasksCompleted > 0,
       tasksCompleted,
       totalTasks,
     };

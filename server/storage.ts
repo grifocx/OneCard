@@ -120,7 +120,6 @@ export class DatabaseStorage implements IStorage {
     const allCards = await db
       .select()
       .from(cards)
-      .where(eq(cards.destroyed, true))
       .orderBy(desc(cards.date));
 
     let currentStreak = 0;
@@ -137,15 +136,17 @@ export class DatabaseStorage implements IStorage {
       const hasCompletedTasks = cardTasks.some(t => t.completed);
 
       if (hasCompletedTasks) {
+        const cardDate = new Date(card.date);
+        cardDate.setHours(0, 0, 0, 0);
+
         if (previousDate) {
           const dayDiff = Math.floor(
-            (previousDate.getTime() - new Date(card.date).getTime()) / (1000 * 60 * 60 * 24)
+            (previousDate.getTime() - cardDate.getTime()) / (1000 * 60 * 60 * 24)
           );
 
           if (dayDiff === 1) {
             tempStreak++;
-          } else {
-            if (currentStreak === 0) currentStreak = tempStreak;
+          } else if (dayDiff > 1) {
             bestStreak = Math.max(bestStreak, tempStreak);
             tempStreak = 1;
           }
@@ -153,17 +154,28 @@ export class DatabaseStorage implements IStorage {
           tempStreak = 1;
         }
 
-        previousDate = new Date(card.date);
-      } else {
-        if (currentStreak === 0) currentStreak = tempStreak;
-        bestStreak = Math.max(bestStreak, tempStreak);
-        tempStreak = 0;
-        previousDate = null;
+        previousDate = cardDate;
       }
     }
 
-    if (currentStreak === 0) currentStreak = tempStreak;
-    bestStreak = Math.max(bestStreak, tempStreak, currentStreak);
+    bestStreak = Math.max(bestStreak, tempStreak);
+
+    // Check if today is part of the streak
+    if (previousDate) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const dayDiff = Math.floor(
+        (today.getTime() - previousDate.getTime()) / (1000 * 60 * 60 * 24)
+      );
+
+      if (dayDiff <= 1) {
+        currentStreak = tempStreak;
+      } else {
+        currentStreak = 0;
+      }
+    } else {
+      currentStreak = 0;
+    }
 
     return { currentStreak, bestStreak };
   }
