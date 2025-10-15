@@ -1,32 +1,100 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Trash2, Plus } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import TaskCheckbox from "./TaskCheckbox";
-import { motion, AnimatePresence } from "framer-motion";
-
-interface Task {
-  id: string;
-  text: string;
-  completed: boolean;
-}
+import { motion } from "framer-motion";
+import type { Task as DBTask } from "@shared/schema";
 
 interface DailyCardProps {
   date: Date;
+  cardId: string;
+  existingTasks: DBTask[];
   onDestroy?: () => void;
 }
 
-export default function DailyCard({ date, onDestroy }: DailyCardProps) {
-  const [bigTask, setBigTask] = useState<Task>({ 
-    id: '1', 
+interface LocalTask {
+  id: string;
+  text: string;
+  completed: boolean;
+  isBigTask: boolean;
+  order: number;
+}
+
+export default function DailyCard({ date, cardId, existingTasks, onDestroy }: DailyCardProps) {
+  const [bigTask, setBigTask] = useState<LocalTask>({ 
+    id: '', 
     text: '', 
-    completed: false 
+    completed: false,
+    isBigTask: true,
+    order: 0
   });
-  const [smallTasks, setSmallTasks] = useState<Task[]>([
-    { id: '2', text: '', completed: false },
-    { id: '3', text: '', completed: false },
-    { id: '4', text: '', completed: false },
+  const [smallTasks, setSmallTasks] = useState<LocalTask[]>([
+    { id: '', text: '', completed: false, isBigTask: false, order: 1 },
+    { id: '', text: '', completed: false, isBigTask: false, order: 2 },
+    { id: '', text: '', completed: false, isBigTask: false, order: 3 },
   ]);
+
+  useEffect(() => {
+    if (existingTasks && existingTasks.length > 0) {
+      const big = existingTasks.find(t => t.isBigTask);
+      if (big) {
+        setBigTask({
+          id: big.id,
+          text: big.text,
+          completed: big.completed,
+          isBigTask: true,
+          order: big.order
+        });
+      }
+
+      const smalls = existingTasks.filter(t => !t.isBigTask).sort((a, b) => a.order - b.order);
+      const updatedSmallTasks = [0, 1, 2].map(i => {
+        const existing = smalls[i];
+        return existing ? {
+          id: existing.id,
+          text: existing.text,
+          completed: existing.completed,
+          isBigTask: false,
+          order: existing.order
+        } : { id: '', text: '', completed: false, isBigTask: false, order: i + 1 };
+      });
+      setSmallTasks(updatedSmallTasks);
+    }
+  }, [existingTasks]);
+
+  const createTaskMutation = useMutation({
+    mutationFn: async (task: { text: string; isBigTask: boolean; order: number }) => {
+      const res = await apiRequest("POST", "/api/tasks", {
+        cardId,
+        ...task,
+        completed: false
+      });
+      return res.json();
+    },
+    onSuccess: (newTask: DBTask, variables) => {
+      if (variables.isBigTask) {
+        setBigTask(prev => ({ ...prev, id: newTask.id }));
+      } else {
+        setSmallTasks(prev => prev.map(t => 
+          t.order === variables.order ? { ...t, id: newTask.id } : t
+        ));
+      }
+      queryClient.invalidateQueries({ queryKey: ["/api/cards/today"] });
+    },
+  });
+
+  const updateTaskMutation = useMutation({
+    mutationFn: async ({ id, updates }: { id: string; updates: Partial<DBTask> }) => {
+      const res = await apiRequest("PATCH", `/api/tasks/${id}`, updates);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/cards/today"] });
+    },
+  });
 
   const formatDate = (date: Date) => {
     return date.toLocaleDateString('en-US', { 
@@ -36,14 +104,44 @@ export default function DailyCard({ date, onDestroy }: DailyCardProps) {
     });
   };
 
-  const handleBigTaskChange = (checked: boolean) => {
-    setBigTask({ ...bigTask, completed: checked });
+  const handleBigTaskTextChange = (text: string) => {
+    setBigTask(prev => ({ ...prev, text }));
   };
 
-  const handleSmallTaskChange = (id: string, checked: boolean) => {
-    setSmallTasks(smallTasks.map(task => 
-      task.id === id ? { ...task, completed: checked } : task
-    ));
+  const handleBigTaskBlur = () => {
+    if (bigTask.text && !bigTask.id) {
+      createTaskMutation.mutate({ text: bigTask.text, isBigTask: true, order: 0 });
+    } else if (bigTask.id && bigTask.text) {
+      updateTaskMutation.mutate({ id: bigTask.id, updates: { text: bigTask.text } });
+    }
+  };
+
+  const handleBigTaskCheck = (checked: boolean) => {
+    setBigTask(prev => ({ ...prev, completed: checked }));
+    if (bigTask.id) {
+      updateTaskMutation.mutate({ id: bigTask.id, updates: { completed: checked } });
+    }
+  };
+
+  const handleSmallTaskTextChange = (index: number, text: string) => {
+    setSmallTasks(prev => prev.map((t, i) => i === index ? { ...t, text } : t));
+  };
+
+  const handleSmallTaskBlur = (index: number) => {
+    const task = smallTasks[index];
+    if (task.text && !task.id) {
+      createTaskMutation.mutate({ text: task.text, isBigTask: false, order: task.order });
+    } else if (task.id && task.text) {
+      updateTaskMutation.mutate({ id: task.id, updates: { text: task.text } });
+    }
+  };
+
+  const handleSmallTaskCheck = (index: number, checked: boolean) => {
+    const task = smallTasks[index];
+    setSmallTasks(prev => prev.map((t, i) => i === index ? { ...t, completed: checked } : t));
+    if (task.id) {
+      updateTaskMutation.mutate({ id: task.id, updates: { completed: checked } });
+    }
   };
 
   const canDestroy = () => {
@@ -51,8 +149,9 @@ export default function DailyCard({ date, onDestroy }: DailyCardProps) {
     return currentHour >= 18; // 6 PM
   };
 
-  const completedCount = [bigTask, ...smallTasks].filter(t => t.completed && t.text).length;
-  const totalCount = [bigTask, ...smallTasks].filter(t => t.text).length;
+  const allTasks = [bigTask, ...smallTasks];
+  const completedCount = allTasks.filter(t => t.completed && t.text).length;
+  const totalCount = allTasks.filter(t => t.text).length;
 
   return (
     <motion.div
@@ -80,7 +179,8 @@ export default function DailyCard({ date, onDestroy }: DailyCardProps) {
               data-testid="input-big-task"
               type="text"
               value={bigTask.text}
-              onChange={(e) => setBigTask({ ...bigTask, text: e.target.value })}
+              onChange={(e) => handleBigTaskTextChange(e.target.value)}
+              onBlur={handleBigTaskBlur}
               placeholder="e.g., Finish Chapter 7 reading"
               className="w-full px-4 py-3 text-lg bg-background border-2 border-primary/30 rounded-md focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all placeholder:text-muted-foreground/50"
             />
@@ -92,7 +192,7 @@ export default function DailyCard({ date, onDestroy }: DailyCardProps) {
               >
                 <TaskCheckbox
                   checked={bigTask.completed}
-                  onCheckedChange={handleBigTaskChange}
+                  onCheckedChange={handleBigTaskCheck}
                   label={bigTask.text}
                   isBigTask={true}
                   testId="checkbox-big-task"
@@ -107,14 +207,13 @@ export default function DailyCard({ date, onDestroy }: DailyCardProps) {
             </label>
             <div className="space-y-3">
               {smallTasks.map((task, index) => (
-                <div key={task.id}>
+                <div key={index}>
                   <input
                     data-testid={`input-small-task-${index + 1}`}
                     type="text"
                     value={task.text}
-                    onChange={(e) => setSmallTasks(smallTasks.map(t => 
-                      t.id === task.id ? { ...t, text: e.target.value } : t
-                    ))}
+                    onChange={(e) => handleSmallTaskTextChange(index, e.target.value)}
+                    onBlur={() => handleSmallTaskBlur(index)}
                     placeholder={`e.g., ${index === 0 ? 'Do laundry' : index === 1 ? 'Email Professor Smith' : 'Go to the gym'}`}
                     className="w-full px-4 py-2.5 bg-background border border-input rounded-md focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/20 transition-all placeholder:text-muted-foreground/50"
                   />
@@ -127,7 +226,7 @@ export default function DailyCard({ date, onDestroy }: DailyCardProps) {
                     >
                       <TaskCheckbox
                         checked={task.completed}
-                        onCheckedChange={(checked) => handleSmallTaskChange(task.id, checked)}
+                        onCheckedChange={(checked) => handleSmallTaskCheck(index, checked)}
                         label={task.text}
                         testId={`checkbox-small-task-${index + 1}`}
                       />
