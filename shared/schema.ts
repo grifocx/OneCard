@@ -34,6 +34,8 @@ export const tasksRelations = relations(tasks, ({ one }) => ({
 export const insertCardSchema = createInsertSchema(cards).omit({
   id: true,
   createdAt: true,
+}).extend({
+  date: z.coerce.date().optional().default(() => new Date()),
 });
 
 export const insertTaskSchema = createInsertSchema(tasks).omit({
